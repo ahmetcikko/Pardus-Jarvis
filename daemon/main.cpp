@@ -1,7 +1,10 @@
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
 #include <atomic>
+#include <chrono>
 #include <csignal>
+#include <cstdint>
+#include <ctime>
 #include <fcntl.h>
 #include <filesystem>
 #include <fstream>
@@ -14,7 +17,18 @@
 #include <unistd.h>
 #include <vector>
 
+static constexpr std::int64_t kStaleMs = 5000;
+static constexpr int kPollSeconds = 2;
+
 static std::atomic_bool g_running = false;
+static std::atomic<std::int64_t> g_lastcallback = 0;
+static volatile sig_atomic_t g_reload = 0;
+
+static std::int64_t now_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
 
 void wakeword_callback(CLFML::LOWWI::Lowwi_ctx_t, std::shared_ptr<void>) {
 
@@ -39,6 +53,7 @@ void wakeword_callback(CLFML::LOWWI::Lowwi_ctx_t, std::shared_ptr<void>) {
 }
 static void call_back(ma_device *pDevice, void *, const void *pInput,
                       ma_uint32 frameCount) {
+    g_lastcallback.store(now_ms());
     auto *runtime = static_cast<CLFML::LOWWI::Lowwi *>((*pDevice).pUserData);
     const float *samples = static_cast<const float *>(pInput);
     (*runtime).run(std::vector<float>(samples, samples + frameCount));
@@ -57,7 +72,33 @@ static std::string config_value(const char *key) {
             return line.substr(want.size());
     return "";
 }
-static void on_hup(int) {}
+static void on_hup(int) { g_reload = 1; }
+static void open_capture(ma_context *context, ma_device *device,
+                         ma_device_config *config, ma_device_id *matched_id,
+                         CLFML::LOWWI::Lowwi *runtime) {
+    ma_device_info *captureInfos;
+    ma_uint32 captureCount;
+    ma_context_get_devices(context, nullptr, nullptr, &captureInfos,
+                           &captureCount);
+    *config = ma_device_config_init(ma_device_type_capture);
+    (*config).capture.format = ma_format_f32;
+    (*config).capture.channels = 1;
+    (*config).sampleRate = 16000;
+    (*config).dataCallback = call_back;
+    (*config).pUserData = runtime;
+    (*config).capture.pDeviceID = nullptr;
+    std::string confdev = config_value("device");
+    for (ma_uint32 i = 0; i < captureCount && !confdev.empty(); i++) {
+        if (confdev == captureInfos[i].name) {
+            *matched_id = captureInfos[i].id;
+            (*config).capture.pDeviceID = matched_id;
+            break;
+        }
+    }
+    ma_device_init(context, config, device);
+    ma_device_start(device);
+    g_lastcallback.store(now_ms());
+}
 int main() {
 #ifdef NDEBUG
     if (fork() > 0)
@@ -91,51 +132,19 @@ int main() {
     ww_runtime.add_wakeword(ww);
     ma_context context;
     ma_context_init(nullptr, 0, nullptr, &context);
-    ma_device_info *captureInfos;
-    ma_uint32 captureCount;
-    ma_context_get_devices(&context, nullptr, nullptr, &captureInfos,
-                           &captureCount);
     ma_device_id matched_id;
     ma_device device;
-    ma_device_config config = ma_device_config_init(ma_device_type_capture);
-    config.capture.format = ma_format_f32;
-    config.capture.channels = 1;
-    config.sampleRate = 16000;
-    config.dataCallback = call_back;
-    config.pUserData = &ww_runtime;
-    std::string confdev = config_value("device");
-    config.capture.pDeviceID = nullptr;
-    for (ma_uint32 i = 0; i < captureCount && !confdev.empty(); i++) {
-        if (confdev == captureInfos[i].name) {
-            matched_id = captureInfos[i].id;
-            config.capture.pDeviceID = &matched_id;
-            break;
-        }
-    }
-    ma_device_init(&context, &config, &device);
-    ma_device_start(&device);
+    ma_device_config config;
+    open_capture(&context, &device, &config, &matched_id, &ww_runtime);
     while (true) {
-        pause();
-        confdev = config_value("device");
+        timespec ts = {kPollSeconds, 0};
+        nanosleep(&ts, nullptr);
+        bool stale = now_ms() - g_lastcallback.load() > kStaleMs;
+        if (!g_reload && !stale)
+            continue;
+        g_reload = 0;
         ma_device_stop(&device);
         ma_device_uninit(&device);
-        ma_context_get_devices(&context, nullptr, nullptr, &captureInfos,
-                               &captureCount);
-        config = ma_device_config_init(ma_device_type_capture);
-        config.capture.format = ma_format_f32;
-        config.capture.channels = 1;
-        config.sampleRate = 16000;
-        config.dataCallback = call_back;
-        config.pUserData = &ww_runtime;
-        config.capture.pDeviceID = nullptr;
-        for (ma_uint32 i = 0; i < captureCount && !confdev.empty(); i++) {
-            if (confdev == captureInfos[i].name) {
-                matched_id = captureInfos[i].id;
-                config.capture.pDeviceID = &matched_id;
-                break;
-            }
-        }
-        ma_device_init(&context, &config, &device);
-        ma_device_start(&device);
+        open_capture(&context, &device, &config, &matched_id, &ww_runtime);
     }
 }

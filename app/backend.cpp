@@ -32,44 +32,44 @@ static constexpr std::int64_t kNoSpeechCloseMs = 5000;
 static constexpr float kVoiceRmsThreshold = 0.012f;
 static constexpr int kMaxTokens = 512;
 static const char *kPromptRoute =
-    "You are Pardus Jarvis, a voice assistant for Pardus Linux. Input is "
-    "Turkish speech transcribed by Whisper. "
-    "Reply with ONE JSON object only.\n"
-    "Decide the user's intent:\n"
-    "open/launch/run an application -> {\"action\":\"open_app\"}\n"
-    "open a website -> {\"action\":\"open_url\",\"target\":\"<https url>\"}\n"
-    "close/quit/kill an application -> {\"action\":\"close_app\"}\n"
-    "change the sound volume -> "
-    "{\"action\":\"volume\",\"target\":\"<0-100|up|down|mute|unmute>\"} - a "
-    "number when they name a level, up/down for louder/quieter, mute/unmute "
-    "for silencing.\n"
-    "reboot/shut down/sleep the whole COMPUTER (only if explicitly named, "
-    "e.g. 'bilgisayari kapat', 'sistemi kapat' - bare 'kapat'/'close' alone "
-    "is close_app, not this) -> "
+    "You are Pardus Jarvis, a Pardus Linux voice assistant. Input is Turkish "
+    "Whisper transcription. Reply with ONE JSON object only.\n"
+    "Intents:\n"
+    "open/launch an app -> {\"action\":\"open_app\"}\n"
+    "open a website, or a browser named with a search term (even if they say "
+    "'ac'/'open' first, e.g. 'Chrome'u ac ve X arat') -> "
+    "{\"action\":\"open_url\",\"target\":\"<https url>\"}; for a search term "
+    "build https://www.google.com/search?q=<term>. A browser with NO search "
+    "term is open_app.\n"
+    "close/quit an app -> {\"action\":\"close_app\"}\n"
+    "change volume -> "
+    "{\"action\":\"volume\",\"target\":\"<0-100|up|down|mute|unmute>\"}\n"
+    "reboot/shutdown/sleep the COMPUTER, only if explicitly named "
+    "('bilgisayari kapat'); bare 'kapat' is close_app -> "
     "{\"action\":\"system_power\",\"target\":\"<reboot|shutdown|sleep>\"}\n"
     "anything else -> {\"action\":\"chat\",\"reply\":\"<short Turkish "
     "answer>\"}\n"
-    "IMPORTANT: polite question forms like 'acar misin', 'acabilir misin', "
-    "'can you open' are REQUESTS, not real questions about your ability. "
-    "Always pick the action, never chat about being able to do it.\n"
+    "Polite forms ('acar misin', 'can you open') are REQUESTS - always act, "
+    "never chat about ability.\n"
     "Examples:\n"
     "'Firefox'u acabilir misin' -> {\"action\":\"open_app\"}\n"
+    "'Chrome'u ac ve kedileri arat' -> "
+    "{\"action\":\"open_url\",\"target\":\"https://www.google.com/"
+    "search?q=kediler\"}\n"
     "'bilgisayari kapat' -> "
     "{\"action\":\"system_power\",\"target\":\"shutdown\"}\n";
 static const char *kPromptOpenA =
-    "You are Pardus Jarvis, a voice assistant for Pardus Linux. The user "
-    "wants an application opened. Installed applications: ";
+    "Pardus Jarvis. The user wants an app opened. Installed apps: ";
 static const char *kPromptOpenB =
-    "\nReply with ONE JSON object only: "
-    "{\"action\":\"open_app\",\"target\":\"<name copied exactly from the "
-    "list>\"} - pick the app the user means even if their words differ.";
+    "\nReply with ONE JSON object: {\"action\":\"open_app\",\"target\":\"<name "
+    "copied exactly from the list>\"} - pick the one they mean even if their "
+    "words differ.";
 static const char *kPromptCloseA =
-    "You are Pardus Jarvis, a voice assistant for Pardus Linux. The user "
-    "wants an application closed. Currently running applications: ";
+    "Pardus Jarvis. The user wants an app closed. Running apps: ";
 static const char *kPromptCloseB =
-    "\nReply with ONE JSON object only: "
-    "{\"action\":\"close_app\",\"target\":\"<name copied exactly from the "
-    "list>\"} - pick the app the user means even if their words differ.";
+    "\nReply with ONE JSON object: {\"action\":\"close_app\",\"target\":\"<name "
+    "copied exactly from the list>\"} - pick the one they mean even if their "
+    "words differ.";
 
 static ma_decoder g_sounddecoder;
 static ma_device g_sounddevice;
