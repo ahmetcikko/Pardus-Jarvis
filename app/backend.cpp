@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -32,20 +33,29 @@ static constexpr std::int64_t kNoSpeechCloseMs = 5000;
 static constexpr float kVoiceRmsThreshold = 0.012f;
 static constexpr int kMaxTokens = 512;
 static const char *kPromptRoute =
-    "You are Pardus Jarvis, a Pardus Linux voice assistant. Input is Turkish "
-    "Whisper transcription. Reply with ONE JSON object only.\n"
-    "Intents:\n"
-    "open/launch an app -> {\"action\":\"open_app\"}\n"
+    "You are Pardus Jarvis, a voice assistant for Pardus Linux. Input is "
+    "Turkish speech transcribed by Whisper, so it may be slightly misheard - "
+    "interpret it charitably, but never invent an action the user did not "
+    "clearly ask for. Reply with ONE JSON object only.\n"
+    "Decide the user's intent:\n"
+    "open/launch/run an application -> {\"action\":\"open_app\"}\n"
     "open a website, or a browser named with a search term (even if they say "
     "'ac'/'open' first, e.g. 'Chrome'u ac ve X arat') -> "
     "{\"action\":\"open_url\",\"target\":\"<https url>\"}; for a search term "
     "build https://www.google.com/search?q=<term>. A browser with NO search "
     "term is open_app.\n"
-    "close/quit an app -> {\"action\":\"close_app\"}\n"
+    "close/quit/kill a RUNNING APPLICATION the user names -> "
+    "{\"action\":\"close_app\"}. Only when they clearly mean an application. "
+    "'Dosyalari kapat', 'sekmeyi kapat', 'pencereyi kapat' are about files, "
+    "tabs or windows INSIDE an app, not the app itself - those are chat, NOT "
+    "close_app. If no application is named, do NOT guess one.\n"
     "change volume -> "
-    "{\"action\":\"volume\",\"target\":\"<0-100|up|down|mute|unmute>\"}\n"
-    "reboot/shutdown/sleep the COMPUTER, only if explicitly named "
-    "('bilgisayari kapat'); bare 'kapat' is close_app -> "
+    "{\"action\":\"volume\",\"target\":\"<0-100|up|down|mute|unmute>\"} - a "
+    "number when they name a level, up/down for louder/quieter, mute/unmute "
+    "for silencing.\n"
+    "reboot/shut down/sleep the whole COMPUTER, only if they explicitly name "
+    "the machine ('bilgisayari kapat', 'sistemi kapat'); a bare 'kapat' or a "
+    "named app is close_app, never this -> "
     "{\"action\":\"system_power\",\"target\":\"<reboot|shutdown|sleep>\"}\n"
     "anything else -> {\"action\":\"chat\",\"reply\":\"<short Turkish "
     "answer>\"}\n"
@@ -65,11 +75,17 @@ static const char *kPromptOpenB =
     "copied exactly from the list>\"} - pick the one they mean even if their "
     "words differ.";
 static const char *kPromptCloseA =
-    "Pardus Jarvis. The user wants an app closed. Running apps: ";
+    "Pardus Jarvis. The user wants a running application closed. These are "
+    "process names of what is currently running: ";
 static const char *kPromptCloseB =
-    "\nReply with ONE JSON object: {\"action\":\"close_app\",\"target\":\"<name "
-    "copied exactly from the list>\"} - pick the one they mean even if their "
-    "words differ.";
+    "\nIf one of them is clearly the application the user named, reply "
+    "{\"action\":\"close_app\",\"target\":\"<name copied exactly from the "
+    "list>\"} - the process name may differ from the app's visible name "
+    "(e.g. the Files app runs as 'nautilus'), so match on meaning.\n"
+    "If NOTHING in the list is clearly what they named, do NOT guess and do "
+    "NOT pick the closest item - reply "
+    "{\"action\":\"chat\",\"reply\":\"<short Turkish answer saying you could "
+    "not find that application>\"}.";
 
 static ma_decoder g_sounddecoder;
 static ma_device g_sounddevice;
@@ -279,15 +295,108 @@ static bool is_critical_comm(const QString &comm) {
                                                   "Pardus-Jarvis-Daemon",
                                                   "Pardus-Jarvis-Settings"};
     for (const QString &name : critical)
-        if (comm.compare(name, Qt::CaseInsensitive) == 0)
+        if (comm.compare(name, Qt::CaseInsensitive) == 0 ||
+            comm.compare(name.left(15), Qt::CaseInsensitive) == 0)
             return true;
     return false;
 }
-static bool terminate_comm(const QString &name) {
+static int parent_pid(int pid) {
+    std::ifstream f("/proc/" + std::to_string(pid) + "/stat");
+    std::string content;
+    std::getline(f, content);
+    size_t p = content.rfind(')');
+    if (p == std::string::npos)
+        return 0;
+    int ppid = 0;
+    if (std::sscanf(content.c_str() + p + 1, " %*c %d", &ppid) != 1)
+        return 0;
+    return ppid;
+}
+static bool is_own_lineage(int pid) {
+    int cur = getpid();
+    for (int i = 0; i < 64 && cur > 1; i++) {
+        if (cur == pid)
+            return true;
+        cur = parent_pid(cur);
+    }
+    return false;
+}
+static bool is_system_path(const std::string &path) {
+    static const std::vector<std::string> roots = {
+        "/usr/lib/systemd/", "/lib/systemd/",  "/usr/libexec/",
+        "/usr/sbin/",        "/sbin/",         "/usr/lib/gdm",
+        "/usr/lib/polkit-1/", "/usr/lib/xorg/", "/usr/lib/dbus-1.0/"};
+    for (const std::string &r : roots)
+        if (path.rfind(r, 0) == 0)
+            return true;
+    return false;
+}
+static std::string cgroup_path(const std::string &line) {
+    size_t first = line.find(':');
+    if (first == std::string::npos)
+        return line;
+    size_t second = line.find(':', first + 1);
+    if (second == std::string::npos)
+        return line;
+    return line.substr(second + 1);
+}
+static bool in_app_slice(int pid) {
+    std::ifstream f("/proc/" + std::to_string(pid) + "/cgroup");
+    std::string line;
+    while (std::getline(f, line))
+        if (cgroup_path(line).find("/app.slice/") != std::string::npos)
+            return true;
+    return false;
+}
+static bool is_protected_pid(int pid) {
+    if (pid <= 1)
+        return true;
+    std::string base = "/proc/" + std::to_string(pid);
+    struct stat st;
+    if (stat(base.c_str(), &st) != 0)
+        return true;
+    if (st.st_uid != getuid())
+        return true;
+    if (is_own_lineage(pid) && !in_app_slice(pid))
+        return true;
+    std::ifstream cmd(base + "/cmdline");
+    std::string arg0;
+    std::getline(cmd, arg0, '\0');
+    if (arg0.empty())
+        return true;
+    char exe[PATH_MAX];
+    ssize_t len = readlink((base + "/exe").c_str(), exe, sizeof(exe) - 1);
+    if (len > 0) {
+        exe[len] = '\0';
+        if (is_system_path(exe))
+            return true;
+    }
+    std::ifstream f(base + "/cgroup");
+    std::string line;
+    while (std::getline(f, line)) {
+        std::string path = cgroup_path(line);
+        if (path.find("/system.slice/") != std::string::npos ||
+            path.find("/init.scope") != std::string::npos ||
+            path.find("/session.slice/") != std::string::npos ||
+            path.find("/background.slice/") != std::string::npos)
+            return true;
+        size_t slash = path.rfind('/');
+        if (slash != std::string::npos) {
+            std::string leaf = path.substr(slash + 1);
+            if (leaf.size() > 8 &&
+                leaf.compare(leaf.size() - 8, 8, ".service") == 0)
+                return true;
+        }
+    }
+    return false;
+}
+enum class KillOutcome { Killed, NotFound, Protected };
+static KillOutcome terminate_comm(const QString &name) {
     if (is_critical_comm(name))
-        return false;
+        return KillOutcome::Protected;
     QString short15 = name.left(15);
     bool any = false;
+    bool blocked = false;
     std::error_code ec;
     for (const std::filesystem::directory_entry &entry :
          std::filesystem::directory_iterator("/proc", ec)) {
@@ -301,12 +410,17 @@ static bool terminate_comm(const QString &name) {
         if (c.compare(name, Qt::CaseInsensitive) != 0 &&
             c.compare(short15, Qt::CaseInsensitive) != 0)
             continue;
-        if (is_critical_comm(c))
+        int pid = std::stoi(pidname);
+        if (is_critical_comm(c) || is_protected_pid(pid)) {
+            blocked = true;
             continue;
-        if (kill(std::stoi(pidname), SIGTERM) == 0)
+        }
+        if (kill(pid, SIGTERM) == 0)
             any = true;
     }
-    return any;
+    if (any)
+        return KillOutcome::Killed;
+    return blocked ? KillOutcome::Protected : KillOutcome::NotFound;
 }
 static QString running_apps() {
     std::unordered_map<QString, std::uint64_t> apps;
@@ -331,7 +445,7 @@ static QString running_apps() {
         if (comm.empty())
             continue;
         QString qc = QString::fromStdString(comm);
-        if (is_critical_comm(qc))
+        if (is_critical_comm(qc) || is_protected_pid(std::stoi(name)))
             continue;
         std::ifstream sm("/proc/" + name + "/statm");
         std::uint64_t sz = 0, rss = 0;
@@ -606,8 +720,12 @@ void Backend::dispatch(const QString &content) {
         }
     } else if (action == "close_app") {
         QString target = obj["target"].toString().trimmed();
-        if (terminate_comm(target))
+        KillOutcome outcome = terminate_comm(target);
+        if (outcome == KillOutcome::Killed)
             finish(target + " kapatılıyor…", 2200, "action");
+        else if (outcome == KillOutcome::Protected)
+            finish("\"" + target + "\" korumalı bir sistem işlemi, kapatamam.",
+                   3500, "error");
         else
             finish("\"" + target + "\" çalışmıyor.", 3000, "error");
     } else if (action == "volume") {

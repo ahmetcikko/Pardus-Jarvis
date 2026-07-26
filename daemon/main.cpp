@@ -100,7 +100,8 @@ static void open_capture(ma_context *context, ma_device *device,
     g_lastcallback.store(now_ms());
 }
 int main() {
-#ifdef NDEBUG
+#ifdef NDEBUG // IMPORTANT: DAEMON WONT WORK CONTINUOUSLY IN DEBUG MODE,
+              // SET CMAKE TO RELEASE BEFORE BUILDING
     if (fork() > 0)
         _exit(0);
     setsid();
