@@ -78,12 +78,13 @@ static const char *kPromptCloseA =
     "Pardus Jarvis. The user wants a running application closed. These are "
     "process names of what is currently running: ";
 static const char *kPromptCloseB =
-    "\nIf one of them is clearly the application the user named, reply "
+    "\nReply with ONE JSON object only. If one of them is clearly the "
+    "application the user named: "
     "{\"action\":\"close_app\",\"target\":\"<name copied exactly from the "
     "list>\"} - the process name may differ from the app's visible name "
     "(e.g. the Files app runs as 'nautilus'), so match on meaning.\n"
     "If NOTHING in the list is clearly what they named, do NOT guess and do "
-    "NOT pick the closest item - reply "
+    "NOT pick the closest item - reply this JSON instead: "
     "{\"action\":\"chat\",\"reply\":\"<short Turkish answer saying you could "
     "not find that application>\"}.";
 
