@@ -12,14 +12,17 @@ class Settings : public QObject {
     Q_PROPERTY(QString language MEMBER m_language NOTIFY changed)
     Q_PROPERTY(int deviceindex MEMBER m_deviceindex NOTIFY changed)
     Q_PROPERTY(bool customkey MEMBER m_customkey NOTIFY changed)
+
   public:
     explicit Settings(QObject *parent = nullptr);
     ~Settings();
+
     Q_INVOKABLE void select_device(int index);
     Q_INVOKABLE void set_language(const QString &lang);
     Q_INVOKABLE void set_apikey(const QString &key);
     Q_INVOKABLE void reset_apikey();
     Q_INVOKABLE void uninstall();
+
   signals:
     void changed();
 
@@ -28,6 +31,7 @@ class Settings : public QObject {
     void save();
     void signal_daemon();
     std::string config_dir() const;
+
     QStringList m_devicenames;
     QString m_language;
     QString m_device;

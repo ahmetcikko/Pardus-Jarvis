@@ -16,6 +16,8 @@ void process_audio(float *samples, int n_samples) {
         return instance;
     }();
     webrtc::StreamConfig stream_cfg(16000, 1);
+
+    // webrtc's APM only accepts 10ms frames regardless of sample rate
     const int frame_size = stream_cfg.sample_rate_hz() / 100;
     apm->Initialize();
     for (int offset = 0; offset + frame_size <= n_samples;

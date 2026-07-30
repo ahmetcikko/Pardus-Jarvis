@@ -32,6 +32,7 @@ static constexpr std::int64_t kSilenceStopMs = 1300;
 static constexpr std::int64_t kNoSpeechCloseMs = 5000;
 static constexpr float kVoiceRmsThreshold = 0.012f;
 static constexpr int kMaxTokens = 512;
+
 static const char *kPromptRoute =
     "You are Pardus Jarvis, a voice assistant for Pardus Linux. Input is "
     "Turkish speech transcribed by Whisper, so it may be slightly misheard - "
@@ -68,6 +69,7 @@ static const char *kPromptRoute =
     "search?q=kediler\"}\n"
     "'bilgisayari kapat' -> "
     "{\"action\":\"system_power\",\"target\":\"shutdown\"}\n";
+
 static const char *kPromptOpenA =
     "Pardus Jarvis. The user wants an app opened. Installed apps: ";
 static const char *kPromptOpenB =
@@ -99,6 +101,7 @@ static void sound_call_back(ma_device *pDevice, void *pOutput, const void *,
         return;
     ma_decoder_read_pcm_frames(decoder, pOutput, frameCount, nullptr);
 }
+
 static void play_sound_if_exists(const QString &path) {
     std::error_code ec;
     if (!std::filesystem::exists(path.toStdString(), ec))
@@ -128,6 +131,7 @@ static void play_sound_if_exists(const QString &path) {
     }
     g_soundactive = true;
 }
+
 static QString normalize(QString s) {
     s = s.trimmed().toLower();
     s.remove(QChar(0x0307));
@@ -168,6 +172,7 @@ static QString normalize(QString s) {
     }
     return out.simplified();
 }
+
 static int levenshtein(const QString &a, const QString &b) {
     int n = a.size();
     int m = b.size();
@@ -189,6 +194,7 @@ static int levenshtein(const QString &a, const QString &b) {
     }
     return prev[m];
 }
+
 static int score_pair(const QString &q, const QString &c) {
     if (q.isEmpty() || c.isEmpty())
         return 0;
@@ -204,6 +210,7 @@ static int score_pair(const QString &q, const QString &c) {
     int m = qMax(q.size(), c.size());
     return int(100.0 * (1.0 - double(d) / m));
 }
+
 static bool spawn(const QStringList &args) {
     std::vector<std::string> strs;
     for (const QString &a : args)
@@ -225,6 +232,7 @@ static bool spawn(const QStringList &args) {
     std::thread([pid]() { waitpid(pid, nullptr, 0); }).detach();
     return true;
 }
+
 static bool launch_app(const DesktopApp &app) {
     QStringList tokens;
     QString cur;
@@ -271,6 +279,7 @@ static bool launch_app(const DesktopApp &app) {
         return false;
     return spawn(args);
 }
+
 static bool is_critical_comm(const QString &comm) {
     static const std::vector<QString> critical = {"systemd",
                                                   "init",
@@ -295,12 +304,15 @@ static bool is_critical_comm(const QString &comm) {
                                                   "Pardus Jarvis",
                                                   "Pardus-Jarvis-Daemon",
                                                   "Pardus-Jarvis-Settings"};
+
+    // /proc truncates comm to 15 chars, so long names need the truncated compare too
     for (const QString &name : critical)
         if (comm.compare(name, Qt::CaseInsensitive) == 0 ||
             comm.compare(name.left(15), Qt::CaseInsensitive) == 0)
             return true;
     return false;
 }
+
 static int parent_pid(int pid) {
     std::ifstream f("/proc/" + std::to_string(pid) + "/stat");
     std::string content;
@@ -309,10 +321,13 @@ static int parent_pid(int pid) {
     if (p == std::string::npos)
         return 0;
     int ppid = 0;
+
+    // comm can itself contain spaces/parens, so parse from the last ')' not the first
     if (std::sscanf(content.c_str() + p + 1, " %*c %d", &ppid) != 1)
         return 0;
     return ppid;
 }
+
 static bool is_own_lineage(int pid) {
     int cur = getpid();
     for (int i = 0; i < 64 && cur > 1; i++) {
@@ -322,6 +337,7 @@ static bool is_own_lineage(int pid) {
     }
     return false;
 }
+
 static bool is_system_path(const std::string &path) {
     static const std::vector<std::string> roots = {
         "/usr/lib/systemd/", "/lib/systemd/",  "/usr/libexec/",
@@ -332,7 +348,9 @@ static bool is_system_path(const std::string &path) {
             return true;
     return false;
 }
+
 static std::string cgroup_path(const std::string &line) {
+    // cgroup v1 lines are "N:controller:path", v2 is "0::path" - skip past both colons either way
     size_t first = line.find(':');
     if (first == std::string::npos)
         return line;
@@ -341,6 +359,7 @@ static std::string cgroup_path(const std::string &line) {
         return line;
     return line.substr(second + 1);
 }
+
 static bool in_app_slice(int pid) {
     std::ifstream f("/proc/" + std::to_string(pid) + "/cgroup");
     std::string line;
@@ -349,6 +368,7 @@ static bool in_app_slice(int pid) {
             return true;
     return false;
 }
+
 static bool is_protected_pid(int pid) {
     if (pid <= 1)
         return true;
@@ -358,6 +378,9 @@ static bool is_protected_pid(int pid) {
         return true;
     if (st.st_uid != getuid())
         return true;
+
+    // only shield our own process tree from itself when it's not a real desktop app,
+    // otherwise a terminal that launched us would become unkillable
     if (is_own_lineage(pid) && !in_app_slice(pid))
         return true;
     std::ifstream cmd(base + "/cmdline");
@@ -391,7 +414,9 @@ static bool is_protected_pid(int pid) {
     }
     return false;
 }
+
 enum class KillOutcome { Killed, NotFound, Protected };
+
 static KillOutcome terminate_comm(const QString &name) {
     if (is_critical_comm(name))
         return KillOutcome::Protected;
@@ -423,6 +448,7 @@ static KillOutcome terminate_comm(const QString &name) {
         return KillOutcome::Killed;
     return blocked ? KillOutcome::Protected : KillOutcome::NotFound;
 }
+
 static QString running_apps() {
     std::unordered_map<QString, std::uint64_t> apps;
     long page = sysconf(_SC_PAGESIZE);
@@ -466,6 +492,7 @@ static QString running_apps() {
         names.append(sorted[i].second);
     return names.join(", ");
 }
+
 static bool open_url(const QString &url) {
     QString u = url.trimmed();
     if (u.isEmpty())
@@ -474,6 +501,7 @@ static bool open_url(const QString &url) {
         u = "https://" + u;
     return spawn({"xdg-open", u});
 }
+
 static QString config_value(const char *key) {
     const char *xdg = getenv("XDG_CONFIG_HOME");
     const char *home = getenv("HOME");
@@ -488,6 +516,7 @@ static QString config_value(const char *key) {
             return QString::fromStdString(line.substr(want.size()));
     return "";
 }
+
 static QStringList xdg_application_dirs() {
     QStringList dirs;
     const char *home = getenv("HOME");
@@ -504,11 +533,13 @@ static QStringList xdg_application_dirs() {
         dirs.append(d + "/applications");
     return dirs;
 }
+
 static QString kv_get(const std::unordered_map<QString, QString> &kv,
                       const QString &key) {
     auto it = kv.find(key);
     return it != kv.end() ? (*it).second : QString();
 }
+
 static bool looks_like_url(const QString &t) {
     if (t.contains("://") || t.startsWith("www."))
         return true;
@@ -517,6 +548,7 @@ static bool looks_like_url(const QString &t) {
             return true;
     return false;
 }
+
 Backend::Backend(QObject *parent)
     : QObject(parent), m_apikey(kDefaultApiKey), m_captureinfos(nullptr),
       m_capturecount(0), m_micOk(false), m_state("idle"), m_level(0.0),
@@ -525,6 +557,8 @@ Backend::Backend(QObject *parent)
     ssize_t len = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
     if (len > 0) {
         exe[len] = '\0';
+
+        // relative paths like sounds/ and the whisper model only resolve correctly from here
         chdir(std::filesystem::path(exe).parent_path().string().c_str());
     }
     m_config = ma_device_config_init(ma_device_type_capture);
@@ -551,23 +585,29 @@ Backend::Backend(QObject *parent)
     m_poll.setInterval(100);
     connect(&m_poll, &QTimer::timeout, this, &Backend::poll);
 }
+
 Backend::~Backend() {
     ma_device_uninit(&m_device);
     ma_context_uninit(&m_context);
 }
+
 QString Backend::state() const { return m_state; }
+
 qreal Backend::level() const { return m_level; }
+
 std::int64_t Backend::elapsed_ms() const {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
                std::chrono::steady_clock::now() - m_clock)
         .count();
 }
+
 void Backend::setState(const QString &s) {
     if (m_state == s)
         return;
     m_state = s;
     emit stateChanged();
 }
+
 void Backend::startRecording() {
     if (m_state != "idle")
         return;
@@ -585,6 +625,7 @@ void Backend::startRecording() {
     setState("listening");
     m_poll.start();
 }
+
 void Backend::call_back(ma_device *pDevice, void *, const void *pInput,
                         ma_uint32 frameCount) {
     Backend *self = static_cast<Backend *>((*pDevice).pUserData);
@@ -605,6 +646,7 @@ void Backend::call_back(ma_device *pDevice, void *, const void *pInput,
         (*self).m_lastVoiceMs.store((*self).elapsed_ms());
     }
 }
+
 void Backend::poll() {
     qreal lv = qBound(0.0, qreal(m_rms.load()) * 8.0, 1.0);
     if (!qFuzzyCompare(lv + 1.0, m_level + 1.0)) {
@@ -624,6 +666,7 @@ void Backend::poll() {
         close();
     }
 }
+
 void Backend::stopRecording() {
     m_poll.stop();
     ma_device_stop(&m_device);
@@ -650,6 +693,7 @@ void Backend::stopRecording() {
         });
     }).detach();
 }
+
 void Backend::send_llm(const QString &system, const QString &user) {
     QUrl url("https://api.groq.com/openai/v1/chat/completions");
     QNetworkRequest request(url);
@@ -669,6 +713,7 @@ void Backend::send_llm(const QString &system, const QString &user) {
     QObject::connect(reply, &QNetworkReply::finished, this,
                      &Backend::handleReply);
 }
+
 void Backend::handleReply() {
     auto *reply = qobject_cast<QNetworkReply *>((*this).sender());
     if (!reply)
@@ -687,6 +732,7 @@ void Backend::handleReply() {
     }
     (*reply).deleteLater();
 }
+
 void Backend::dispatch(const QString &content) {
     QString raw = content.trimmed();
     int a = raw.indexOf('{');
@@ -695,6 +741,9 @@ void Backend::dispatch(const QString &content) {
     if (a >= 0 && b > a)
         obj = QJsonDocument::fromJson(raw.mid(a, b - a + 1).toUtf8()).object();
     QString action = obj["action"].toString();
+
+    // m_stage tracks whether this reply is the initial intent routing or a follow-up
+    // pick from a specific app/process list, since both go through the same dispatch path
     if (m_stage == "route" && action == "open_app") {
         m_stage = "open";
         send_llm(QString(kPromptOpenA) + m_applist + kPromptOpenB, m_input);
@@ -787,18 +836,22 @@ void Backend::dispatch(const QString &content) {
         finish("Anlayamadım.", 2200, "error");
     }
 }
+
 void Backend::finish(const QString &text, int displayMs, const QString &kind) {
     setState("responding");
     emit responseReady(text, displayMs, kind);
     QTimer::singleShot(displayMs, this, &Backend::close);
 }
+
 void Backend::close() {
     play_sound_if_exists("sounds/shutdown.mp3");
     setState("closing");
 }
+
 void Backend::quitNow() {
     QTimer::singleShot(500, qApp, &QCoreApplication::quit);
 }
+
 void Backend::scan_desktops() {
     m_apps.clear();
     QStringList dirs = xdg_application_dirs();
@@ -881,6 +934,7 @@ void Backend::scan_desktops() {
         names.append(app.name);
     m_applist = names.join(", ");
 }
+
 const DesktopApp *Backend::resolve_app(const QString &query) const {
     QString q = normalize(query);
     if (q.isEmpty())
@@ -899,6 +953,7 @@ const DesktopApp *Backend::resolve_app(const QString &query) const {
     }
     return bestScore >= 62 ? best : nullptr;
 }
+
 void Backend::enumerate_devices() {
     if (ma_context_get_devices(&(*this).m_context, nullptr, nullptr,
                                &(*this).m_captureinfos,

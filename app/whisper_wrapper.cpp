@@ -8,9 +8,12 @@ void whisper_init() {
         ctx = whisper_init_from_file_with_params(
             "ggml-small-q5_1.bin", whisper_context_default_params());
 }
+
 std::string transcribe(const float *samples, int n_samples) {
     if (!ctx)
         return "";
+
+    // below half a second at 16kHz there's rarely anything worth decoding
     if (n_samples < 8000)
         return "";
     whisper_full_params params =

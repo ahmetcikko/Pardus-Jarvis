@@ -17,22 +17,28 @@ struct DesktopApp {
     QString exec;
     QStringList matchers;
 };
+
 class Backend : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString state READ state NOTIFY stateChanged)
     Q_PROPERTY(qreal level READ level NOTIFY levelChanged)
+
   public:
     explicit Backend(QObject *parent = nullptr);
     ~Backend();
+
     Q_INVOKABLE void startRecording();
     Q_INVOKABLE void stopRecording();
     Q_INVOKABLE void quitNow();
+
     QString state() const;
     qreal level() const;
+
   signals:
     void stateChanged();
     void levelChanged();
     void responseReady(const QString &text, int displayMs, const QString &kind);
+
   private slots:
     void poll();
     void handleReply();
@@ -49,6 +55,7 @@ class Backend : public QObject {
     static void call_back(ma_device *pDevice, void *pOutput, const void *pInput,
                           ma_uint32 frameCount);
     void enumerate_devices();
+
     QNetworkAccessManager m_networkmanager;
     QString m_apikey;
     QString m_applist;

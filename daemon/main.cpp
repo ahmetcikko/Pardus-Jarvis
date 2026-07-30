@@ -31,7 +31,6 @@ static std::int64_t now_ms() {
 }
 
 void wakeword_callback(CLFML::LOWWI::Lowwi_ctx_t, std::shared_ptr<void>) {
-
     if (g_running.exchange(true))
         return;
     pid_t pid = fork();
@@ -51,6 +50,7 @@ void wakeword_callback(CLFML::LOWWI::Lowwi_ctx_t, std::shared_ptr<void>) {
         g_running.store(false);
     }).detach();
 }
+
 static void call_back(ma_device *pDevice, void *, const void *pInput,
                       ma_uint32 frameCount) {
     g_lastcallback.store(now_ms());
@@ -58,6 +58,7 @@ static void call_back(ma_device *pDevice, void *, const void *pInput,
     const float *samples = static_cast<const float *>(pInput);
     (*runtime).run(std::vector<float>(samples, samples + frameCount));
 }
+
 static std::string config_value(const char *key) {
     const char *xdg = getenv("XDG_CONFIG_HOME");
     const char *home = getenv("HOME");
@@ -72,7 +73,9 @@ static std::string config_value(const char *key) {
             return line.substr(want.size());
     return "";
 }
+
 static void on_hup(int) { g_reload = 1; }
+
 static void open_capture(ma_context *context, ma_device *device,
                          ma_device_config *config, ma_device_id *matched_id,
                          CLFML::LOWWI::Lowwi *runtime) {
@@ -99,6 +102,7 @@ static void open_capture(ma_context *context, ma_device *device,
     ma_device_start(device);
     g_lastcallback.store(now_ms());
 }
+
 int main() {
 #ifdef NDEBUG // IMPORTANT: DAEMON WONT WORK CONTINUOUSLY IN DEBUG MODE,
               // SET CMAKE TO RELEASE BEFORE BUILDING
@@ -137,6 +141,9 @@ int main() {
     ma_device device;
     ma_device_config config;
     open_capture(&context, &device, &config, &matched_id, &ww_runtime);
+
+    // suspend/resume can silently kill the underlying capture stream without
+    // ever firing an error, so watch the callback clock and reopen if it goes quiet
     while (true) {
         timespec ts = {kPollSeconds, 0};
         nanosleep(&ts, nullptr);
